@@ -1,4 +1,5 @@
 #include "utility.h"
+#include "tic_toc.hpp"
 #include "lio_sam/cloud_info.h"
 
 #include <gtsam/geometry/Rot3.h>
@@ -48,6 +49,8 @@ typedef PointXYZIRPYT  PointTypePose;
 /**
  * mapOptimization模块:包含配准,后端优化
  *　　imu通过激光里程计数据进行预测，而激光里程计利用预测数据融合优化
+ *   由于mapOptmization处理时效性较差,目前只隔一帧进行处理,mappingProcessInterval为0.15s.
+ *
  * 输入的数据:
  *    subCloud,  点云数据, 来自FeatureExtraction, 每隔一定时间处理一次
  *    subGPS,  　 GPS原始数据
@@ -65,6 +68,15 @@ typedef PointXYZIRPYT  PointTypePose;
  *    pubRecentKeyFrames,          "lio_sam/mapping/map_local"
  *    pubRecentKeyFrame,           "lio_sam/mapping/cloud_registered"
  *    pubCloudRegisteredRaw,       "lio_sam/mapping/cloud_registered_raw"
+ *
+ * 性能测试:
+ *    最影响处理性能的部分, 处理一帧大约需要 50-130ms.
+ *    主要耗时过程如下：
+ *    1. extractSurroundingKeyFrames,
+ *       耗时较为严重,而且随着时间的延迟,会消耗大量的时间,后期二三十ms常见，甚至可达60ms.
+ *    2. scan2MapOptimization
+ *       大约30ms (18-70)
+ *    且上面两部分过程往往正相关，周围点云提取数量增多，增加了匹配过程计算量.
  */
 class mapOptimization : public ParamServer
 {
@@ -174,20 +186,16 @@ public:
 
     mapOptimization()
     {
-        ISAM2Params parameters;
-        parameters.relinearizeThreshold = 0.1;
-        parameters.relinearizeSkip = 1;
-        isam = new ISAM2(parameters);
+        subCloud = nh.subscribe<lio_sam::cloud_info>("lio_sam/feature/cloud_info", 1, &mapOptimization::laserCloudInfoHandler, this, ros::TransportHints().tcpNoDelay());
+        subGPS   = nh.subscribe<nav_msgs::Odometry> (gpsTopic, 200, &mapOptimization::gpsHandler, this, ros::TransportHints().tcpNoDelay());
+        subLoop  = nh.subscribe<std_msgs::Float64MultiArray>("lio_loop/loop_closure_detection", 1, &mapOptimization::loopInfoHandler, this, ros::TransportHints().tcpNoDelay());
+
 
         pubKeyPoses                 = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/trajectory", 1);
         pubLaserCloudSurround       = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/map_global", 1);
         pubLaserOdometryGlobal      = nh.advertise<nav_msgs::Odometry> ("lio_sam/mapping/odometry", 1);
         pubLaserOdometryIncremental = nh.advertise<nav_msgs::Odometry> ("lio_sam/mapping/odometry_incremental", 1);
         pubPath                     = nh.advertise<nav_msgs::Path>("lio_sam/mapping/path", 1);
-
-        subCloud = nh.subscribe<lio_sam::cloud_info>("lio_sam/feature/cloud_info", 1, &mapOptimization::laserCloudInfoHandler, this, ros::TransportHints().tcpNoDelay());
-        subGPS   = nh.subscribe<nav_msgs::Odometry> (gpsTopic, 200, &mapOptimization::gpsHandler, this, ros::TransportHints().tcpNoDelay());
-        subLoop  = nh.subscribe<std_msgs::Float64MultiArray>("lio_loop/loop_closure_detection", 1, &mapOptimization::loopInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
         pubHistoryKeyFrames   = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/icp_loop_closure_history_cloud", 1);
         pubIcpKeyFrames       = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/icp_loop_closure_corrected_cloud", 1);
@@ -197,10 +205,17 @@ public:
         pubRecentKeyFrame     = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_registered", 1);
         pubCloudRegisteredRaw = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_registered_raw", 1);
 
+
         downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
         downSizeFilterSurf.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
         downSizeFilterICP.setLeafSize(mappingSurfLeafSize, mappingSurfLeafSize, mappingSurfLeafSize);
         downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
+
+        ISAM2Params parameters;
+        parameters.relinearizeThreshold = 0.1;
+        parameters.relinearizeSkip = 1;
+        isam = new ISAM2(parameters);
+
 
         allocateMemory();
     }
@@ -260,6 +275,8 @@ public:
      */
     void laserCloudInfoHandler(const lio_sam::cloud_infoConstPtr& msgIn)
     {
+
+
         // extract time stamp
         timeLaserInfoStamp = msgIn->header.stamp;
         timeLaserInfoCur = msgIn->header.stamp.toSec();
@@ -276,25 +293,43 @@ public:
         {
             timeLastProcessing = timeLaserInfoCur;
 
+            TicToc t_op;
+            TicToc t;
             /// 前端开始
             updateInitialGuess();
 
             extractSurroundingKeyFrames();
+            if (testTime)
+              std::cout << "extractSurroundingKeyFrames elapse time: " << t_op.toc() << std::endl;
 
             downsampleCurrentScan();
+            if (testTime)
+              std::cout << "downsampleCurrentScan elapse time: " << t_op.toc() << std::endl;
 
             scan2MapOptimization();
+            if (testTime)
+              std::cout << "scan2MapOptimization elapse time: " << t_op.toc() << std::endl;
 
             /// 后端开始
             saveKeyFramesAndFactor();
+            if (testTime)
+              std::cout << "pose graph elapse time: " << t_op.toc() << std::endl;
 
             correctPoses();
+            if (testTime)
+              std::cout << "pose graph elapse time: " << t_op.toc() << std::endl;
 
             /// 输出结果
             publishOdometry();
 
             publishFrames();
+            if (testTime)
+              std::cout << "pose graph elapse time: " << t_op.toc() << std::endl;
+
+            if(testTime)
+              std::cout << "Map optmization elapse time: " << t.toc() << std::endl;
         }
+
     }
 
     void gpsHandler(const nav_msgs::Odometry::ConstPtr& gpsMsg)
@@ -1277,12 +1312,6 @@ public:
             kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
             kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);
 
-            std::cout << " before transformTobeMapped: " << std::endl;
-            for(int i = 0; i < 6; i++) {
-              std::cout << transformTobeMapped[i] << " ";
-            }
-            std::cout << std::endl;
-
             for (int iterCount = 0; iterCount < 30; iterCount++)
             {
                 laserCloudOri->clear();
@@ -1296,13 +1325,6 @@ public:
                 if (LMOptimization(iterCount) == true)
                     break;              
             }
-
-            std::cout << " after transformTobeMapped: " << std::endl;
-            for(int i = 0; i < 6; i++) {
-              std::cout << transformTobeMapped[i] << " ";
-            }
-            std::cout << std::endl;
-
 
           transformUpdate();
         } else {

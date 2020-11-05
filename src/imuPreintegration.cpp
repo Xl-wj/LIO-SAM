@@ -1,4 +1,5 @@
 #include "utility.h"
+#include "tic_toc.hpp"
 
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/geometry/Pose3.h>
@@ -30,6 +31,9 @@ using gtsam::symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
  * 输出的数据中:
  *    pubImuOdometry,    "odometry/imu",       　　　　　　　 发布融合后的imu 预积分完成优化后预测的odom
  * 　　pubImuPath,       "lio_sam/imu/path",                 发布融合后的imu path
+ *
+ * 性能测试：
+ * 　 处理一帧大约需要 1ms内.
  */
 class TransformFusion : public ParamServer
 {
@@ -225,8 +229,8 @@ public:
 
     IMUPreintegration()
     {
-        subImu      = nh.subscribe<sensor_msgs::Imu>  (imuTopic,                   2000, &IMUPreintegration::imuHandler,      this, ros::TransportHints().tcpNoDelay());
-        subOdometry = nh.subscribe<nav_msgs::Odometry>("lio_sam/mapping/odometry_incremental", 5,    &IMUPreintegration::odometryHandler, this, ros::TransportHints().tcpNoDelay());
+        subImu      = nh.subscribe<sensor_msgs::Imu>  (imuTopic, 2000, &IMUPreintegration::imuHandler, this, ros::TransportHints().tcpNoDelay());
+        subOdometry = nh.subscribe<nav_msgs::Odometry>("lio_sam/mapping/odometry_incremental", 5, &IMUPreintegration::odometryHandler, this, ros::TransportHints().tcpNoDelay());
 
         pubImuOdometry = nh.advertise<nav_msgs::Odometry> (odomTopic+"_incremental", 2000);
 
@@ -274,6 +278,7 @@ public:
      */
     void odometryHandler(const nav_msgs::Odometry::ConstPtr& odomMsg)
     {
+        TicToc t;
         std::lock_guard<std::mutex> lock(mtx);
 
         double currentCorrectionTime = ROS_TIME(odomMsg);
@@ -457,6 +462,9 @@ public:
 
         ++key;
         doneFirstOpt = true;
+
+        if(testTime)
+          std::cout << "Imu intergration elapse time: " << t.toc() << std::endl;
     }
 
     /// 检测预积分失败的函数, 即时爆出错误,重置积分器

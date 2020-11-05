@@ -1,4 +1,5 @@
 #include "utility.h"
+#include "tic_toc.hpp"
 #include "lio_sam/cloud_info.h"
 
 struct smoothness_t{ 
@@ -13,7 +14,17 @@ struct by_value{
 };
 
 /**
- * 点云特征提取，包含角特征和面特征
+ * 点云特征提取模块,包含角特征和面特征
+ * 输入的数据:
+ *    subLaserCloudInfo,     "lio_sam/deskew/cloud_info",       点云信息数据
+ *
+ * 输出的数据中:
+ *    pubCornerPoints        "lio_sam/feature/cloud_corner",    边特征点云
+ *    pubSurfacePoints       "lio_sam/feature/cloud_surface",　　面特征点云
+ *    pubLaserCloudInfo      "lio_sam/feature/cloud_info",      点云信息数据
+ *
+ * 性能测试：
+ * 　　处理一帧大约需要 10ms内.(3-7)
  */
 class FeatureExtraction : public ParamServer
 {
@@ -70,6 +81,8 @@ public:
 
     void laserCloudInfoHandler(const lio_sam::cloud_infoConstPtr& msgIn)
     {
+        TicToc t;
+
         cloudInfo = *msgIn; // new cloud info
         cloudHeader = msgIn->header; // new cloud header
         pcl::fromROSMsg(msgIn->cloud_deskewed, *extractedCloud); // new cloud for extraction
@@ -81,6 +94,9 @@ public:
         extractFeatures();
 
         publishFeatureCloud();
+
+        if(testTime)
+          std::cout << "Feature extraction elapse time: " << t.toc() << std::endl;
     }
 
     void calculateSmoothness()

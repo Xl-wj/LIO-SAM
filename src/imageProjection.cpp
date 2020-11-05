@@ -1,4 +1,5 @@
 #include "utility.h"
+#include "tic_toc.hpp"
 #include "lio_sam/cloud_info.h"
 
 // Velodyne
@@ -46,6 +47,9 @@ const int queueLength = 2000;
  * 输出的数据中:
  *    cloud_deskewed --> "lio_sam/deskew/cloud_deskewed"
  *    cloud_info     --> "lio_sam/deskew/cloud_info"       到特征提取节点
+ *
+ * 性能测试：
+ * 　　处理一帧大约需要 10ms.
  */
 
 class ImageProjection : public ParamServer
@@ -188,6 +192,9 @@ public:
 
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
+
+        TicToc t;
+
         if (!cachePointCloud(laserCloudMsg))
             return;
 
@@ -201,6 +208,9 @@ public:
         publishClouds();
 
         resetParameters();
+
+        if(testTime)
+          std::cout << "Image projection elapse time: " << t.toc() << std::endl;
     }
 
     bool cachePointCloud(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
@@ -221,7 +231,6 @@ public:
         timeScanEnd = timeScanCur + laserCloudIn->points.back().time; // Velodyne
         // timeScanEnd = timeScanCur + (float)laserCloudIn->points.back().t / 1000000000.0; // Ouster
 
-        std::cout << "duration: " << laserCloudIn->points.back().time << std::endl;
         // check dense flag
         if (laserCloudIn->is_dense == false)
         {

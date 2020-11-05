@@ -148,6 +148,10 @@ public:
     float globalMapVisualizationPoseDensity;
     float globalMapVisualizationLeafSize;
 
+
+    /// test flags
+    bool testTime;
+
     ParamServer()
     {
         std::cout << " ParamServer " << std::endl;
@@ -224,6 +228,8 @@ public:
         nh.param<float>("lio_sam/globalMapVisualizationSearchRadius", globalMapVisualizationSearchRadius, 1e3);
         nh.param<float>("lio_sam/globalMapVisualizationPoseDensity", globalMapVisualizationPoseDensity, 10.0);
         nh.param<float>("lio_sam/globalMapVisualizationLeafSize", globalMapVisualizationLeafSize, 1.0);
+
+        nh.param<bool>("lio_sam/testTime", testTime, false);
 
         usleep(100);
     }
