@@ -12,6 +12,9 @@ struct by_value{
     }
 };
 
+/**
+ * 点云特征提取，包含角特征和面特征
+ */
 class FeatureExtraction : public ParamServer
 {
 
@@ -34,12 +37,14 @@ public:
 
     std::vector<smoothness_t> cloudSmoothness;
     float *cloudCurvature;
-    int *cloudNeighborPicked;
+    int *cloudNeighborPicked; /// 点过滤标识, 默认值为0, 挑选完后置1.表示后续不做处理.
     int *cloudLabel;
 
     FeatureExtraction()
     {
-        subLaserCloudInfo = nh.subscribe<lio_sam::cloud_info>("lio_sam/deskew/cloud_info", 1, &FeatureExtraction::laserCloudInfoHandler, this, ros::TransportHints().tcpNoDelay());
+        subLaserCloudInfo = nh.subscribe<lio_sam::cloud_info>("lio_sam/deskew/cloud_info", 1,
+                                                              &FeatureExtraction::laserCloudInfoHandler,
+                                                              this, ros::TransportHints().tcpNoDelay());
 
         pubLaserCloudInfo = nh.advertise<lio_sam::cloud_info> ("lio_sam/feature/cloud_info", 1);
         pubCornerPoints = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/feature/cloud_corner", 1);
@@ -260,7 +265,7 @@ public:
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "lio_sam");
+    ros::init(argc, argv, "lio_sam_feature");
 
     FeatureExtraction FE;
 

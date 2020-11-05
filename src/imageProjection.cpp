@@ -36,6 +36,18 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRT,
 
 const int queueLength = 2000;
 
+/**
+ * 图像反投模块，imu数据对点云去畸变
+ * odo数据做初始变换估计吗？
+ * 输入的数据:
+ *    subImu,            imuTopic,                         imu原始数据
+ *    subOdom,           odomTopic+"_incremental"          imu预积分模块输出,高频里程计数据,作初值预测使用
+ *    subLaserCloud,     pointCloudTopic                   激光原始数据
+ * 输出的数据中:
+ *    cloud_deskewed --> "lio_sam/deskew/cloud_deskewed"
+ *    cloud_info     --> "lio_sam/deskew/cloud_info"       到特征提取节点
+ */
+
 class ImageProjection : public ParamServer
 {
 private:
@@ -79,6 +91,7 @@ private:
     float odomIncreY;
     float odomIncreZ;
 
+    /// 包含imu是否可用, odo是否可用, lidar的位姿, 各点对应线号，各点景深等信息
     lio_sam::cloud_info cloudInfo;
     double timeScanCur;
     double timeScanEnd;
@@ -86,9 +99,10 @@ private:
 
 
 public:
-    ImageProjection():
-    deskewFlag(0)
-    {
+    ImageProjection(): deskewFlag(0) {
+
+        std::cout << "pointCloudTopic: " << pointCloudTopic << std::endl;
+
         subImu        = nh.subscribe<sensor_msgs::Imu>(imuTopic, 2000, &ImageProjection::imuHandler, this, ros::TransportHints().tcpNoDelay());
         subOdom       = nh.subscribe<nav_msgs::Odometry>(odomTopic+"_incremental", 2000, &ImageProjection::odometryHandler, this, ros::TransportHints().tcpNoDelay());
         subLaserCloud = nh.subscribe<sensor_msgs::PointCloud2>(pointCloudTopic, 5, &ImageProjection::cloudHandler, this, ros::TransportHints().tcpNoDelay());
@@ -207,6 +221,7 @@ public:
         timeScanEnd = timeScanCur + laserCloudIn->points.back().time; // Velodyne
         // timeScanEnd = timeScanCur + (float)laserCloudIn->points.back().t / 1000000000.0; // Ouster
 
+        std::cout << "duration: " << laserCloudIn->points.back().time << std::endl;
         // check dense flag
         if (laserCloudIn->is_dense == false)
         {
@@ -399,11 +414,15 @@ public:
         if (int(round(startOdomMsg.pose.covariance[0])) != int(round(endOdomMsg.pose.covariance[0])))
             return;
 
-        Eigen::Affine3f transBegin = pcl::getTransformation(startOdomMsg.pose.pose.position.x, startOdomMsg.pose.pose.position.y, startOdomMsg.pose.pose.position.z, roll, pitch, yaw);
+        Eigen::Affine3f transBegin = pcl::getTransformation(startOdomMsg.pose.pose.position.x,
+                                                            startOdomMsg.pose.pose.position.y,
+                                                            startOdomMsg.pose.pose.position.z, roll, pitch, yaw);
 
         tf::quaternionMsgToTF(endOdomMsg.pose.pose.orientation, orientation);
         tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
-        Eigen::Affine3f transEnd = pcl::getTransformation(endOdomMsg.pose.pose.position.x, endOdomMsg.pose.pose.position.y, endOdomMsg.pose.pose.position.z, roll, pitch, yaw);
+        Eigen::Affine3f transEnd = pcl::getTransformation(endOdomMsg.pose.pose.position.x,
+                                                          endOdomMsg.pose.pose.position.y,
+                                                          endOdomMsg.pose.pose.position.z, roll, pitch, yaw);
 
         Eigen::Affine3f transBt = transBegin.inverse() * transEnd;
 
@@ -570,13 +589,14 @@ public:
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "lio_sam");
+    ros::init(argc, argv, "lio_sam_image_projection");
 
     ImageProjection IP;
-    
+
     ROS_INFO("\033[1;32m----> Image Projection Started.\033[0m");
 
     ros::MultiThreadedSpinner spinner(3);
+
     spinner.spin();
     
     return 0;

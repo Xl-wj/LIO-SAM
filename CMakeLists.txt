@@ -43,12 +43,12 @@ catkin_package(
   INCLUDE_DIRS include
   DEPENDS PCL GTSAM
 
-  CATKIN_DEPENDS 
+  CATKIN_DEPENDS
   std_msgs
   nav_msgs
   geometry_msgs
   sensor_msgs
-  message_runtime 
+  message_runtime
   message_generation
 )
 
@@ -57,7 +57,7 @@ include_directories(
 	include
 	${catkin_INCLUDE_DIRS}
 	${PCL_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
+    ${OpenCV_INCLUDE_DIRS}
 	${GTSAM_INCLUDE_DIR}
 )
 
@@ -65,8 +65,8 @@ include_directories(
 link_directories(
 	include
 	${PCL_LIBRARY_DIRS}
-  ${OpenCV_LIBRARY_DIRS}
-  ${GTSAM_LIBRARY_DIRS}
+    ${OpenCV_LIBRARY_DIRS}
+    ${GTSAM_LIBRARY_DIRS}
 )
 
 ###########

@@ -45,7 +45,27 @@ POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRPYT,
 
 typedef PointXYZIRPYT  PointTypePose;
 
-
+/**
+ * mapOptimization模块:包含配准,后端优化
+ *　　imu通过激光里程计数据进行预测，而激光里程计利用预测数据融合优化
+ * 输入的数据:
+ *    subCloud,  点云数据, 来自FeatureExtraction, 每隔一定时间处理一次
+ *    subGPS,  　 GPS原始数据
+ *    subLoop,   闭环数据           "lio_loop/loop_closure_detection", 应该没有用到
+ *
+ * 输出的数据中:
+ *    pubKeyPoses,                 "lio_sam/mapping/trajectory"
+ *    pubLaserCloudSurround,       "lio_sam/mapping/map_global"
+ *    pubLaserOdometryGlobal,      "lio_sam/mapping/odometry"
+ *    pubLaserOdometryIncremental, "lio_sam/mapping/odometry_incremental"
+ *    pubPath,                     "lio_sam/mapping/path"
+ *    pubHistoryKeyFrames,         "lio_sam/mapping/icp_loop_closure_history_cloud"
+ *    pubIcpKeyFrames,             "lio_sam/mapping/icp_loop_closure_corrected_cloud"
+ *    pubLoopConstraintEdge,       "/lio_sam/mapping/loop_closure_constraints"
+ *    pubRecentKeyFrames,          "lio_sam/mapping/map_local"
+ *    pubRecentKeyFrame,           "lio_sam/mapping/cloud_registered"
+ *    pubCloudRegisteredRaw,       "lio_sam/mapping/cloud_registered_raw"
+ */
 class mapOptimization : public ParamServer
 {
 
@@ -57,7 +77,7 @@ public:
     Values optimizedEstimate;
     ISAM2 *isam;
     Values isamCurrentEstimate;
-    Eigen::MatrixXd poseCovariance;
+    Eigen::MatrixXd poseCovariance; /// pose协方差,在后端优化中取值,用在GPS添加的判断中.
 
     ros::Publisher pubLaserCloudSurround;
     ros::Publisher pubLaserOdometryGlobal;
@@ -81,7 +101,8 @@ public:
 
     vector<pcl::PointCloud<PointType>::Ptr> cornerCloudKeyFrames;
     vector<pcl::PointCloud<PointType>::Ptr> surfCloudKeyFrames;
-    
+
+    /// 下面的cloudKeyPoses3D, cloudKeyPoses6D中的intensity为索引
     pcl::PointCloud<PointType>::Ptr cloudKeyPoses3D;
     pcl::PointCloud<PointTypePose>::Ptr cloudKeyPoses6D;
     pcl::PointCloud<PointType>::Ptr copy_cloudKeyPoses3D;
@@ -122,6 +143,8 @@ public:
     ros::Time timeLaserInfoStamp;
     double timeLaserInfoCur;
 
+    /// scan-2-map配准过程的pose变量, order: q_x, q_y, q_z, x, y, z.
+    /// 在后端优化完成后, 并对其进行更新.
     float transformTobeMapped[6];
 
     std::mutex mtx;
@@ -135,7 +158,7 @@ public:
     int laserCloudCornerLastDSNum = 0;
     int laserCloudSurfLastDSNum = 0;
 
-    bool aLoopIsClosed = false;
+    bool aLoopIsClosed = false;       /// 为判断是否全局优化标识, 在添加了新的GPS factor和添加到闭环factor后置true,优化结束后置false.
     map<int, int> loopIndexContainer; // from new to old
     vector<pair<int, int>> loopIndexQueue;
     vector<gtsam::Pose3> loopPoseQueue;
@@ -145,8 +168,8 @@ public:
     nav_msgs::Path globalPath;
 
     Eigen::Affine3f transPointAssociateToMap;
-    Eigen::Affine3f incrementalOdometryAffineFront;
-    Eigen::Affine3f incrementalOdometryAffineBack;
+    Eigen::Affine3f incrementalOdometryAffineFront; /// 上一帧的pose
+    Eigen::Affine3f incrementalOdometryAffineBack;  /// scan-2-map匹配后得到的Pose
 
 
     mapOptimization()
@@ -225,6 +248,16 @@ public:
         matP.setZero();
     }
 
+    /**
+     * 核心的激光雷达回调函数,只是对scan-to-map进行匹配,
+     * 在处理前,收集了当前scan之前的数帧数据,并进行了抽稀.
+     * scan-2-map alignment,采用了loam的方式, 一步到位
+     * 细节：
+     *       1. transformTobeMapped 初始值设定, 来自于imu模块, 如何计算得来?
+     *       2.
+     *
+     * @param msgIn
+     */
     void laserCloudInfoHandler(const lio_sam::cloud_infoConstPtr& msgIn)
     {
         // extract time stamp
@@ -243,6 +276,7 @@ public:
         {
             timeLastProcessing = timeLaserInfoCur;
 
+            /// 前端开始
             updateInitialGuess();
 
             extractSurroundingKeyFrames();
@@ -251,10 +285,12 @@ public:
 
             scan2MapOptimization();
 
+            /// 后端开始
             saveKeyFramesAndFactor();
 
             correctPoses();
 
+            /// 输出结果
             publishOdometry();
 
             publishFrames();
@@ -345,7 +381,9 @@ public:
 
 
 
-
+    /**
+     * 地图可视化线程. (单线程)
+     */
     void visualizeGlobalMapThread()
     {
         ros::Rate rate(0.2);
@@ -449,8 +487,10 @@ public:
 
 
 
-
-
+    /**
+     * 闭环检测. (单线程)
+     * 每隔 1秒检测一次
+     */
     void loopClosureThread()
     {
         if (loopClosureEnableFlag == false)
@@ -465,6 +505,10 @@ public:
         }
     }
 
+    /**
+     * 这个接口是需要外部的闭环检测结果, 怀疑是弃用的?
+     * @param loopMsg
+     */
     void loopInfoHandler(const std_msgs::Float64MultiArray::ConstPtr& loopMsg)
     {
         std::lock_guard<std::mutex> lock(mtxLoopInfo);
@@ -1233,6 +1277,12 @@ public:
             kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);
             kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);
 
+            std::cout << " before transformTobeMapped: " << std::endl;
+            for(int i = 0; i < 6; i++) {
+              std::cout << transformTobeMapped[i] << " ";
+            }
+            std::cout << std::endl;
+
             for (int iterCount = 0; iterCount < 30; iterCount++)
             {
                 laserCloudOri->clear();
@@ -1247,12 +1297,22 @@ public:
                     break;              
             }
 
-            transformUpdate();
+            std::cout << " after transformTobeMapped: " << std::endl;
+            for(int i = 0; i < 6; i++) {
+              std::cout << transformTobeMapped[i] << " ";
+            }
+            std::cout << std::endl;
+
+
+          transformUpdate();
         } else {
             ROS_WARN("Not enough features! Only %d edge and %d planar features available.", laserCloudCornerLastDSNum, laserCloudSurfLastDSNum);
         }
     }
 
+    /**
+     * (TODO) 这里为何要进行插值 ?
+     **/
     void transformUpdate()
     {
         if (cloudInfo.imuAvailable == true)
@@ -1434,6 +1494,9 @@ public:
 
     void saveKeyFramesAndFactor()
     {
+      /**
+       * 关键帧判断,对关键帧进行抽稀
+       */
         if (saveFrame() == false)
             return;
 
@@ -1678,12 +1741,14 @@ public:
 
 int main(int argc, char** argv)
 {
-    ros::init(argc, argv, "lio_sam");
+    std::cout << " lio_sam_map_optmization " << std::endl;
+
+    ros::init(argc, argv, "lio_sam_map_optmization");
 
     mapOptimization MO;
 
     ROS_INFO("\033[1;32m----> Map Optimization Started.\033[0m");
-    
+
     std::thread loopthread(&mapOptimization::loopClosureThread, &MO);
     std::thread visualizeMapThread(&mapOptimization::visualizeGlobalMapThread, &MO);
 

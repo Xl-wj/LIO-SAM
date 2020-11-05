@@ -2,7 +2,7 @@ lio_sam:
 
   # Topics
   pointCloudTopic: "points_raw"               # Point cloud data
-  imuTopic: "imu_raw"                         # IMU data
+  imuTopic: "imu_raw"                         # IMU data(imu_correct/imu_raw)
   odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
   gpsTopic: "odometry/gpsz"                   # GPS odometry topic from navsat, see module_navsat.launch file
 
@@ -46,12 +46,12 @@ lio_sam:
   extrinsicRPY: [0,  1, 0,
                  -1, 0, 0,
                   0, 0, 1]
-  # extrinsicRot: [1, 0, 0,
-  #                 0, 1, 0,
-  #                 0, 0, 1]
-  # extrinsicRPY: [1, 0, 0,
-  #                 0, 1, 0,
-  #                 0, 0, 1]
+#  extrinsicRot: [1, 0, 0,
+#                 0, 1, 0,
+#                 0, 0, 1]
+#  extrinsicRPY: [1, 0, 0,
+#                 0, 1, 0,
+#                 0, 0, 1]
 
   # LOAM feature threshold
   edgeThreshold: 1.0
@@ -90,7 +90,7 @@ lio_sam:
   # Visualization
   globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
   globalMapVisualizationPoseDensity: 10.0       # meters, global map visualization keyframe density
-  globalMapVisualizationLeafSize: 1.0           # meters, global map visualization cloud density
+  globalMapVisualizationLeafSize: 0.1           # meters, global map visualization cloud density
 
 
 

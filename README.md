@@ -224,3 +224,11 @@ Part of the code is adapted from [LeGO-LOAM](https://github.com/RobustFieldAuton
 ## Acknowledgement
 
   - LIO-SAM is based on LOAM (J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time).
+
+## Run youself
+
+  ### load parameters into system
+  - rosparam load params.yaml
+
+  ### run ros node
+  - rosrun lio_sam lio_sam_imageProjection and etc.

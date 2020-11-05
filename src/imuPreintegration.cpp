@@ -20,6 +20,17 @@ using gtsam::symbol_shorthand::X; // Pose3 (x,y,z,r,p,y)
 using gtsam::symbol_shorthand::V; // Vel   (xdot,ydot,zdot)
 using gtsam::symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
 
+/**
+ * 融合模块:　利用imu数据在上一次激光里程计的基础上进行位姿预测.
+ *
+ * 输入的数据:
+ *    subImuOdometry,    "odometry/imu_incremental",        imu对pose的预测值,来自于IMUPreintegration节点
+ *    subLaserOdometry,  "lio_sam/mapping/odometry",        mapOptimization输出, 即激光里程计数据(优化后的)
+ *
+ * 输出的数据中:
+ *    pubImuOdometry,    "odometry/imu",       　　　　　　　 发布融合后的imu 预积分完成优化后预测的odom
+ * 　　pubImuPath,       "lio_sam/imu/path",                 发布融合后的imu path
+ */
 class TransformFusion : public ParamServer
 {
 public:
@@ -153,6 +164,16 @@ public:
     }
 };
 
+/**
+ * imu数据预积分及lidar里程计的紧融合模块
+ *
+ * 输入的数据:
+ *    subImu,              "imu_raw",                              imu原始数据
+ *    subOdometry,         "lio_sam/mapping/odometry_incremental", mapOptimization输出, 单帧里程计估计数据
+ *
+ * 输出的数据中:
+ *    pubImuOdometry,      "odometry/imu_incremental", 　　　　　　　由TransformFusion,ImageProjection模块接收.
+ */
 class IMUPreintegration : public ParamServer
 {
 public:
@@ -209,7 +230,7 @@ public:
 
         pubImuOdometry = nh.advertise<nav_msgs::Odometry> (odomTopic+"_incremental", 2000);
 
-        boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(imuGravity);
+        boost::shared_ptr<gtsam::PreintegrationParams> p = gtsam::PreintegrationParams::MakeSharedU(9.80511);
         p->accelerometerCovariance  = gtsam::Matrix33::Identity(3,3) * pow(imuAccNoise, 2); // acc white noise in continuous
         p->gyroscopeCovariance      = gtsam::Matrix33::Identity(3,3) * pow(imuGyrNoise, 2); // gyro white noise in continuous
         p->integrationCovariance    = gtsam::Matrix33::Identity(3,3) * pow(1e-4, 2); // error committed in integrating position from velocities
@@ -221,7 +242,7 @@ public:
         correctionNoise = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 0.05, 0.05, 0.05, 0.1, 0.1, 0.1).finished()); // rad,rad,rad,m, m, m
         correctionNoise2 = gtsam::noiseModel::Diagonal::Sigmas((gtsam::Vector(6) << 1, 1, 1, 1, 1, 1).finished()); // rad,rad,rad,m, m, m
         noiseModelBetweenBias = (gtsam::Vector(6) << imuAccBiasN, imuAccBiasN, imuAccBiasN, imuGyrBiasN, imuGyrBiasN, imuGyrBiasN).finished();
-        
+        // 优化前后的imu
         imuIntegratorImu_ = new gtsam::PreintegratedImuMeasurements(p, prior_imu_bias); // setting up the IMU integration for IMU message thread
         imuIntegratorOpt_ = new gtsam::PreintegratedImuMeasurements(p, prior_imu_bias); // setting up the IMU integration for optimization        
     }
@@ -247,6 +268,10 @@ public:
         systemInitialized = false;
     }
 
+    /**
+     * 激光里程计数据接收回调.
+     * @param odomMsg
+     */
     void odometryHandler(const nav_msgs::Odometry::ConstPtr& odomMsg)
     {
         std::lock_guard<std::mutex> lock(mtx);
@@ -274,6 +299,7 @@ public:
             resetOptimization();
 
             // pop old IMU message
+            // 去掉一些比较旧的imu数据, 只需要保证雷达odom时间戳在imu队列中间
             while (!imuQueOpt.empty())
             {
                 if (ROS_TIME(&imuQueOpt.front()) < currentCorrectionTime - delta_t)
@@ -433,6 +459,7 @@ public:
         doneFirstOpt = true;
     }
 
+    /// 检测预积分失败的函数, 即时爆出错误,重置积分器
     bool failureDetection(const gtsam::Vector3& velCur, const gtsam::imuBias::ConstantBias& biasCur)
     {
         Eigen::Vector3f vel(velCur.x(), velCur.y(), velCur.z());
@@ -453,6 +480,12 @@ public:
         return false;
     }
 
+    /**
+     * imu数据接受回调函数.
+     * @param imu_raw
+     * 通过利用最新的imu参数以及imu数据，对位姿进行积分预测,预测。最终将ImuOdometry发布.
+     * ImuOdometry数据将由TransformFusion模块接收.
+     */
     void imuHandler(const sensor_msgs::Imu::ConstPtr& imu_raw)
     {
         std::lock_guard<std::mutex> lock(mtx);
