@@ -1,5 +1,7 @@
 #include "utility.h"
 #include "tic_toc.hpp"
+#include "system_data.h"
+
 #include "lio_sam/cloud_info.h"
 
 #include <gtsam/geometry/Rot3.h>
@@ -60,7 +62,6 @@ typedef PointXYZIRPYT  PointTypePose;
  *    pubKeyPoses,                 "lio_sam/mapping/trajectory"
  *    pubLaserCloudSurround,       "lio_sam/mapping/map_global"
  *    pubLaserOdometryGlobal,      "lio_sam/mapping/odometry"
- *    pubLaserOdometryIncremental, "lio_sam/mapping/odometry_incremental"
  *    pubPath,                     "lio_sam/mapping/path"
  *    pubHistoryKeyFrames,         "lio_sam/mapping/icp_loop_closure_history_cloud"
  *    pubIcpKeyFrames,             "lio_sam/mapping/icp_loop_closure_corrected_cloud"
@@ -93,7 +94,6 @@ public:
 
     ros::Publisher pubLaserCloudSurround;
     ros::Publisher pubLaserOdometryGlobal;
-    ros::Publisher pubLaserOdometryIncremental;
     ros::Publisher pubKeyPoses;
     ros::Publisher pubPath;
 
@@ -194,7 +194,6 @@ public:
         pubKeyPoses                 = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/trajectory", 1);
         pubLaserCloudSurround       = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/map_global", 1);
         pubLaserOdometryGlobal      = nh.advertise<nav_msgs::Odometry> ("lio_sam/mapping/odometry", 1);
-        pubLaserOdometryIncremental = nh.advertise<nav_msgs::Odometry> ("lio_sam/mapping/odometry_incremental", 1);
         pubPath                     = nh.advertise<nav_msgs::Path>("lio_sam/mapping/path", 1);
 
         pubHistoryKeyFrames   = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/icp_loop_closure_history_cloud", 1);
@@ -437,8 +436,26 @@ public:
         int unused = system((std::string("exec rm -r ") + savePCDDirectory).c_str());
         unused = system((std::string("mkdir ") + savePCDDirectory).c_str());
         // save key frame transformations
+        {
+            for(const auto &pose : cloudKeyPoses6D->points) {
+                std::cout << "timestamp: " << std::to_string(pose.time) << std::endl;
+            }
+        }
         pcl::io::savePCDFileASCII(savePCDDirectory + "trajectory.pcd", *cloudKeyPoses3D);
-        pcl::io::savePCDFileASCII(savePCDDirectory + "transformations.pcd", *cloudKeyPoses6D);
+        pcl::io::savePCDFileBinaryCompressed(savePCDDirectory + "transformations.pcd", *cloudKeyPoses6D);
+
+
+        {
+            pcl::PointCloud<PointTypePose> cloudKeyPoses6DDD;
+            pcl::io::loadPCDFile(savePCDDirectory + "transformations.pcd", cloudKeyPoses6DDD);
+
+            for(const auto &pose : cloudKeyPoses6DDD.points) {
+                std::cout << "timestamp: " << std::to_string(pose.time) << std::endl;
+            }
+
+        }
+
+
         // extract global point cloud map        
         pcl::PointCloud<PointType>::Ptr globalCornerCloud(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr globalCornerCloudDS(new pcl::PointCloud<PointType>());
@@ -1574,6 +1591,7 @@ public:
         thisPose6D.pitch = latestEstimate.rotation().pitch();
         thisPose6D.yaw   = latestEstimate.rotation().yaw();
         thisPose6D.time = timeLaserInfoCur;
+        std::cout << "add time: " << std::to_string(thisPose6D.time) << std::endl;
         cloudKeyPoses6D->push_back(thisPose6D);
 
         // cout << "****************************************************" << endl;
@@ -1655,6 +1673,7 @@ public:
 
     void publishOdometry()
     {
+        /// to imu-intergration and TransformFusion module
         // Publish odometry for ROS (global)
         nav_msgs::Odometry laserOdometryROS;
         laserOdometryROS.header.stamp = timeLaserInfoStamp;
@@ -1665,63 +1684,14 @@ public:
         laserOdometryROS.pose.pose.position.z = transformTobeMapped[5];
         laserOdometryROS.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
         pubLaserOdometryGlobal.publish(laserOdometryROS);
-        
+//        saveOdometryPose(laserOdometryROS, "lidar");
+
         // Publish TF
         static tf::TransformBroadcaster br;
         tf::Transform t_odom_to_lidar = tf::Transform(tf::createQuaternionFromRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]),
                                                       tf::Vector3(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5]));
         tf::StampedTransform trans_odom_to_lidar = tf::StampedTransform(t_odom_to_lidar, timeLaserInfoStamp, odometryFrame, "lidar_link");
         br.sendTransform(trans_odom_to_lidar);
-
-        // Publish odometry for ROS (incremental)
-        static bool lastIncreOdomPubFlag = false;
-        static nav_msgs::Odometry laserOdomIncremental; // incremental odometry msg
-        static Eigen::Affine3f increOdomAffine; // incremental odometry in affine
-        if (lastIncreOdomPubFlag == false)
-        {
-            lastIncreOdomPubFlag = true;
-            laserOdomIncremental = laserOdometryROS;
-            increOdomAffine = trans2Affine3f(transformTobeMapped);
-        } else {
-            Eigen::Affine3f affineIncre = incrementalOdometryAffineFront.inverse() * incrementalOdometryAffineBack;
-            increOdomAffine = increOdomAffine * affineIncre;
-            float x, y, z, roll, pitch, yaw;
-            pcl::getTranslationAndEulerAngles (increOdomAffine, x, y, z, roll, pitch, yaw);
-            if (cloudInfo.imuAvailable == true)
-            {
-                if (std::abs(cloudInfo.imuPitchInit) < 1.4)
-                {
-                    double imuWeight = 0.1;
-                    tf::Quaternion imuQuaternion;
-                    tf::Quaternion transformQuaternion;
-                    double rollMid, pitchMid, yawMid;
-
-                    // slerp roll
-                    transformQuaternion.setRPY(roll, 0, 0);
-                    imuQuaternion.setRPY(cloudInfo.imuRollInit, 0, 0);
-                    tf::Matrix3x3(transformQuaternion.slerp(imuQuaternion, imuWeight)).getRPY(rollMid, pitchMid, yawMid);
-                    roll = rollMid;
-
-                    // slerp pitch
-                    transformQuaternion.setRPY(0, pitch, 0);
-                    imuQuaternion.setRPY(0, cloudInfo.imuPitchInit, 0);
-                    tf::Matrix3x3(transformQuaternion.slerp(imuQuaternion, imuWeight)).getRPY(rollMid, pitchMid, yawMid);
-                    pitch = pitchMid;
-                }
-            }
-            laserOdomIncremental.header.stamp = timeLaserInfoStamp;
-            laserOdomIncremental.header.frame_id = odometryFrame;
-            laserOdomIncremental.child_frame_id = "odom_mapping";
-            laserOdomIncremental.pose.pose.position.x = x;
-            laserOdomIncremental.pose.pose.position.y = y;
-            laserOdomIncremental.pose.pose.position.z = z;
-            laserOdomIncremental.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(roll, pitch, yaw);
-            if (isDegenerate)
-                laserOdomIncremental.pose.covariance[0] = 1;
-            else
-                laserOdomIncremental.pose.covariance[0] = 0;
-        }
-        pubLaserOdometryIncremental.publish(laserOdomIncremental);
     }
 
     void publishFrames()

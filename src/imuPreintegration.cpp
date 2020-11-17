@@ -156,8 +156,11 @@ public:
             pose_stamped.header.frame_id = odometryFrame;
             pose_stamped.pose = laserOdometry.pose.pose;
             imuPath.poses.push_back(pose_stamped);
+
+            /// 只保留最近一秒内的imu轨迹推算
             while(!imuPath.poses.empty() && imuPath.poses.front().header.stamp.toSec() < lidarOdomTime - 1.0)
                 imuPath.poses.erase(imuPath.poses.begin());
+
             if (pubImuPath.getNumSubscribers() != 0)
             {
                 imuPath.header.stamp = imuOdomQueue.back().header.stamp;
@@ -230,7 +233,7 @@ public:
     IMUPreintegration()
     {
         subImu      = nh.subscribe<sensor_msgs::Imu>  (imuTopic, 2000, &IMUPreintegration::imuHandler, this, ros::TransportHints().tcpNoDelay());
-        subOdometry = nh.subscribe<nav_msgs::Odometry>("lio_sam/mapping/odometry_incremental", 5, &IMUPreintegration::odometryHandler, this, ros::TransportHints().tcpNoDelay());
+        subOdometry = nh.subscribe<nav_msgs::Odometry>("lio_sam/mapping/odometry", 5, &IMUPreintegration::odometryHandler, this, ros::TransportHints().tcpNoDelay());
 
         pubImuOdometry = nh.advertise<nav_msgs::Odometry> (odomTopic+"_incremental", 2000);
 

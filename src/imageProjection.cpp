@@ -1,39 +1,9 @@
+#include "point_type.h"
 #include "utility.h"
 #include "tic_toc.hpp"
+
+#include "system_data.h"
 #include "lio_sam/cloud_info.h"
-
-// Velodyne
-struct PointXYZIRT
-{
-    PCL_ADD_POINT4D
-    PCL_ADD_INTENSITY;
-    uint16_t ring;
-    float time;
-    EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-} EIGEN_ALIGN16;
-
-POINT_CLOUD_REGISTER_POINT_STRUCT (PointXYZIRT,  
-    (float, x, x) (float, y, y) (float, z, z) (float, intensity, intensity)
-    (uint16_t, ring, ring) (float, time, time)
-)
-
-// Ouster
-// struct PointXYZIRT {
-//     PCL_ADD_POINT4D;
-//     float intensity;
-//     uint32_t t;
-//     uint16_t reflectivity;
-//     uint8_t ring;
-//     uint16_t noise;
-//     uint32_t range;
-//     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
-// }EIGEN_ALIGN16;
-
-// POINT_CLOUD_REGISTER_POINT_STRUCT(PointXYZIRT,
-//     (float, x, x) (float, y, y) (float, z, z) (float, intensity, intensity)
-//     (uint32_t, t, t) (uint16_t, reflectivity, reflectivity)
-//     (uint8_t, ring, ring) (uint16_t, noise, noise) (uint32_t, range, range)
-// )
 
 const int queueLength = 2000;
 
@@ -192,12 +162,13 @@ public:
 
     void cloudHandler(const sensor_msgs::PointCloud2ConstPtr& laserCloudMsg)
     {
-
         TicToc t;
 
+        /// 需要延后两帧点云，是为了保证所有数据全量？
         if (!cachePointCloud(laserCloudMsg))
             return;
 
+        /// 在确定imu数据正常的情况下,
         if (!deskewInfo())
             return;
 
