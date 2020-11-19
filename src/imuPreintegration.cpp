@@ -28,9 +28,9 @@ using gtsam::symbol_shorthand::B; // Bias  (ax,ay,az,gx,gy,gz)
  *    subImuOdometry,    "odometry/imu_incremental",        imu对pose的预测值,来自于IMUPreintegration节点
  *    subLaserOdometry,  "lio_sam/mapping/odometry",        mapOptimization输出, 即激光里程计数据(优化后的)
  *
- * 输出的数据中:
+ * 输出的数据(目前来看只供调试使用了):
  *    pubImuOdometry,    "odometry/imu",       　　　　　　　 发布融合后的imu 预积分完成优化后预测的odom
- * 　　pubImuPath,       "lio_sam/imu/path",                 发布融合后的imu path
+ * 　　pubImuPath,        "lio_sam/imu/path",                发布融合后的imu path
  *
  * 性能测试：
  * 　 处理一帧大约需要 1ms内.
@@ -179,7 +179,7 @@ public:
  *    subOdometry,         "lio_sam/mapping/odometry_incremental", mapOptimization输出, 单帧里程计估计数据
  *
  * 输出的数据中:
- *    pubImuOdometry,      "odometry/imu_incremental", 　　　　　　　由TransformFusion,ImageProjection模块接收.
+ *    pubImuOdometry,      "odometry/imu_incremental", 　　　　　　　由 TransformFusion, ImageProjection 模块接收.注意图像反投模块使用进行初始化
  */
 class IMUPreintegration : public ParamServer
 {
@@ -229,6 +229,12 @@ public:
 
     gtsam::Pose3 imu2Lidar = gtsam::Pose3(gtsam::Rot3(1, 0, 0, 0), gtsam::Point3(-extTrans.x(), -extTrans.y(), -extTrans.z()));
     gtsam::Pose3 lidar2Imu = gtsam::Pose3(gtsam::Rot3(1, 0, 0, 0), gtsam::Point3(extTrans.x(), extTrans.y(), extTrans.z()));
+
+//    gtsam::Pose3 imuLidarEx = gtsam::Pose3(gtsam::Rot3(0.7109991612784888, -0.0003322854964867765, -0.0009627138901622398, 0.7031921382113232),
+//                                           gtsam::Point3(0.02300933748483658, 0.1077668368816376, 1.503111839294434));
+//
+//    gtsam::Pose3 imu2Lidar = imuLidarEx;
+//    gtsam::Pose3 lidar2Imu = imuLidarEx.inverse();
 
     IMUPreintegration()
     {
@@ -319,7 +325,7 @@ public:
                     break;
             }
             // initial pose
-            prevPose_ = lidarPose.compose(lidar2Imu);
+            prevPose_ = lidarPose.compose(lidar2Imu); /// 激光里程计pose转换为imu系下
             gtsam::PriorFactor<gtsam::Pose3> priorPose(X(0), prevPose_, priorPoseNoise);
             graphFactors.add(priorPose);
             // initial velocity
@@ -406,7 +412,7 @@ public:
         graphFactors.add(gtsam::BetweenFactor<gtsam::imuBias::ConstantBias>(B(key - 1), B(key), gtsam::imuBias::ConstantBias(),
                          gtsam::noiseModel::Diagonal::Sigmas(sqrt(imuIntegratorOpt_->deltaTij()) * noiseModelBetweenBias)));
         // add pose factor
-        gtsam::Pose3 curPose = lidarPose.compose(lidar2Imu);
+        gtsam::Pose3 curPose = lidarPose.compose(lidar2Imu); /// 激光里程计pose转换为imu系下
         gtsam::PriorFactor<gtsam::Pose3> pose_factor(X(key), curPose, degenerate ? correctionNoise2 : correctionNoise);
         graphFactors.add(pose_factor);
         // insert predicted values
@@ -528,7 +534,7 @@ public:
 
         // transform imu pose to ldiar
         gtsam::Pose3 imuPose = gtsam::Pose3(currentState.quaternion(), currentState.position());
-        gtsam::Pose3 lidarPose = imuPose.compose(imu2Lidar);
+        gtsam::Pose3 lidarPose = imuPose.compose(imu2Lidar); /// imu里程计pose转换为激光系下
 
         odometry.pose.pose.position.x = lidarPose.translation().x();
         odometry.pose.pose.position.y = lidarPose.translation().y();
