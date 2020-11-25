@@ -148,6 +148,9 @@ public:
     float globalMapVisualizationPoseDensity;
     float globalMapVisualizationLeafSize;
 
+    // frequency
+    int imuFrequency;
+    int lidarFrequency;
 
     /// test flags
     bool testTime;
@@ -155,6 +158,9 @@ public:
     ParamServer()
     {
         std::cout << " ParamServer " << std::endl;
+
+        nh.param<int>("lio_sam/imuFrequency", imuFrequency, 500);
+        nh.param<int>("lio_sam/lidarFrequency", lidarFrequency, 10);
 
         nh.param<std::string>("/robot_id", robot_id, "roboat");
 
@@ -257,11 +263,11 @@ public:
         imu_out.orientation.z = q_final.z();
         imu_out.orientation.w = q_final.w();
 
-        if (sqrt(q_final.x()*q_final.x() + q_final.y()*q_final.y() + q_final.z()*q_final.z() + q_final.w()*q_final.w()) < 0.1)
-        {
-            ROS_ERROR("Invalid quaternion, please use a 9-axis IMU!");
-            ros::shutdown();
-        }
+//        if (sqrt(q_final.x()*q_final.x() + q_final.y()*q_final.y() + q_final.z()*q_final.z() + q_final.w()*q_final.w()) < 0.1)
+//        {
+//            ROS_ERROR("Invalid quaternion, please use a 9-axis IMU!");
+//            ros::shutdown();
+//        }
 
         return imu_out;
     }

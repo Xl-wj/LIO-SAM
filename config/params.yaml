@@ -1,5 +1,9 @@
 lio_sam:
 
+  #frequency
+  imuFrequency: 100
+  lidarFrequency: 10
+
   # Topics
   pointCloudTopic: "points_raw"               # Point cloud data
   imuTopic: "imu_raw"                         # IMU data(imu_correct/imu_raw)
